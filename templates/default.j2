@@ -1,0 +1,6 @@
+# {{ ansible_managed }}
+# Read by coredns.service through EnvironmentFile. The Corefile expands these
+# with the {$VAR} syntax.
+{% for key, value in coredns_environment | dictsort %}
+{{ key }}={{ value }}
+{% endfor %}

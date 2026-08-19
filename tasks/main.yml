@@ -1,0 +1,183 @@
+---
+# Install CoreDNS from the official binary release - it is not packaged by
+# Debian - and run it under systemd. The Corefile comes either from a Jinja
+# template, a raw file copied verbatim, or inline content.
+#
+# Any file the service user cannot open on its own - a TLS private key, most
+# likely - is handed over by systemd through LoadCredential= rather than by
+# relaxing permissions; see coredns_credentials in defaults/main.yml.
+
+- name: Ensure the architecture is supported
+  ansible.builtin.assert:
+    that:
+      - coredns_arch | length > 0
+    fail_msg: >-
+      No CoreDNS release asset is mapped for architecture
+      {{ ansible_facts['architecture'] }}. Add it to coredns_arch_map.
+
+# The sources have a defined precedence - see coredns_config_source in
+# vars/main.yml - so the only unresolvable case is all three being empty.
+- name: Ensure a Corefile source is configured
+  ansible.builtin.assert:
+    that:
+      - "[coredns_config_template, coredns_config_src, coredns_config_content] | select('truthy') | list | length > 0"
+    fail_msg: >-
+      Set one of coredns_config_content, coredns_config_src or
+      coredns_config_template - they take effect in that order of precedence.
+
+- name: Create the system group
+  ansible.builtin.group:
+    name: "{{ coredns_group }}"
+    system: true
+    state: present
+  when: coredns_create_user
+
+- name: Create the system user
+  ansible.builtin.user:
+    name: "{{ coredns_user }}"
+    group: "{{ coredns_group }}"
+    home: "{{ coredns_state_dir }}"
+    create_home: false
+    shell: /usr/sbin/nologin
+    password: "!"
+    system: true
+    state: present
+  when: coredns_create_user
+
+- name: Check whether the binary is already installed
+  ansible.builtin.stat:
+    path: "{{ coredns_bin_dir }}/coredns"
+  register: coredns_binary
+
+# check_mode: false so --check works against a host where the binary is already
+# there; without it the version stays unknown and every run looks changed.
+- name: Read the installed version
+  ansible.builtin.command:
+    cmd: "{{ coredns_bin_dir }}/coredns --version"
+  register: coredns_installed_version
+  changed_when: false
+  check_mode: false
+  when: coredns_binary.stat.exists
+
+# CoreDNS prints "CoreDNS-1.14.6" on the first line.
+- name: Decide whether the binary has to be installed
+  ansible.builtin.set_fact:
+    coredns_install_needed: >-
+      {{ not coredns_binary.stat.exists
+         or ('CoreDNS-' ~ coredns_version) not in (coredns_installed_version.stdout | default('')) }}
+
+- name: Create the download directory
+  ansible.builtin.file:
+    path: "{{ coredns_download_dir }}"
+    owner: root
+    group: root
+    mode: "0755"
+    state: directory
+  when: coredns_install_needed
+
+# unarchive cannot verify a checksum, so the tarball is fetched separately.
+# get_url resolves the .sha256 URL and matches the line by the archive name,
+# which is why dest keeps the original filename.
+- name: Download the release tarball
+  ansible.builtin.get_url:
+    url: "{{ coredns_download_url }}"
+    dest: "{{ coredns_download_dir }}/{{ coredns_archive }}"
+    checksum: "sha256:{{ coredns_checksum_url }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: coredns_install_needed
+
+- name: Install the binary
+  ansible.builtin.unarchive:
+    src: "{{ coredns_download_dir }}/{{ coredns_archive }}"
+    dest: "{{ coredns_bin_dir }}"
+    remote_src: true
+    owner: root
+    group: root
+    mode: "0755"
+  when: coredns_install_needed
+  notify: Restart coredns
+
+- name: Create the config directory
+  ansible.builtin.file:
+    path: "{{ coredns_config_dir }}"
+    owner: root
+    group: root
+    mode: "0755"
+    state: directory
+
+# systemd recreates this on every start through StateDirectory=, but the unit's
+# WorkingDirectory= has to resolve on the very first start too.
+- name: Create the state directory
+  ansible.builtin.file:
+    path: "{{ coredns_state_dir }}"
+    owner: "{{ coredns_user }}"
+    group: "{{ coredns_group }}"
+    mode: "0755"
+    state: directory
+
+# 0640 root:coredns - the service only reads it, and the Corefile can name
+# internal hosts and forwarders worth keeping off a world-readable path.
+- name: Write the Corefile from a template
+  ansible.builtin.template:
+    src: "{{ coredns_config_template }}"
+    dest: "{{ coredns_config_file }}"
+    owner: root
+    group: "{{ coredns_group }}"
+    mode: "0640"
+  when: coredns_config_source == 'template'
+  notify: Restart coredns
+
+- name: Write the Corefile from a file
+  ansible.builtin.copy:
+    src: "{{ coredns_config_src }}"
+    dest: "{{ coredns_config_file }}"
+    owner: root
+    group: "{{ coredns_group }}"
+    mode: "0640"
+  when: coredns_config_source == 'src'
+  notify: Restart coredns
+
+- name: Write the Corefile from inline content
+  ansible.builtin.copy:
+    content: "{{ coredns_config_content }}"
+    dest: "{{ coredns_config_file }}"
+    owner: root
+    group: "{{ coredns_group }}"
+    mode: "0640"
+  when: coredns_config_source == 'content'
+  notify: Restart coredns
+
+- name: Write the environment file
+  ansible.builtin.template:
+    src: default.j2
+    dest: /etc/default/coredns
+    owner: root
+    group: "{{ coredns_group }}"
+    mode: "0640"
+  when: coredns_environment | length > 0
+  notify: Restart coredns
+
+- name: Remove the environment file
+  ansible.builtin.file:
+    path: /etc/default/coredns
+    state: absent
+  when: coredns_environment | length == 0
+  notify: Restart coredns
+
+- name: Write the systemd unit
+  ansible.builtin.template:
+    src: coredns.service.j2
+    dest: /etc/systemd/system/coredns.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart coredns
+
+- name: Manage the coredns service
+  ansible.builtin.systemd_service:
+    name: coredns
+    enabled: "{{ coredns_service_enabled }}"
+    state: "{{ coredns_service_state }}"
+    daemon_reload: true

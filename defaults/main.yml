@@ -1,0 +1,85 @@
+---
+# Release to install. CoreDNS is not packaged by Debian, so the role pulls the
+# official binary from GitHub.
+# renovate: datasource=github-releases depName=coredns/coredns
+coredns_version: 1.14.6
+
+# Ansible's architecture fact to the GOARCH suffix used in the release assets.
+# Extend this map rather than overriding coredns_arch if you add a platform.
+coredns_arch_map:
+  aarch64: arm64
+  arm64: arm64
+  x86_64: amd64
+  amd64: amd64
+  armv6l: arm
+  armv7l: arm
+  riscv64: riscv64
+  s390x: s390x
+  ppc64le: ppc64le
+
+coredns_arch: "{{ coredns_arch_map[ansible_facts['architecture']] | default('') }}"
+
+# The archive name has to stay verbatim: the .sha256 file lists the checksum
+# against this exact filename, and get_url matches the line by basename.
+coredns_archive: "coredns_{{ coredns_version }}_linux_{{ coredns_arch }}.tgz"
+coredns_download_url: "https://github.com/coredns/coredns/releases/download/v{{ coredns_version }}/{{ coredns_archive }}"
+coredns_checksum_url: "{{ coredns_download_url }}.sha256"
+coredns_download_dir: /var/cache/coredns
+
+# /usr/local/bin keeps the binary out of the dpkg-managed tree. Upstream's
+# example unit assumes /usr/bin; either works, the unit follows this variable.
+coredns_bin_dir: /usr/local/bin
+
+coredns_config_dir: /etc/coredns
+coredns_config_file: "{{ coredns_config_dir }}/Corefile"
+
+# Where the Corefile comes from. They take effect in order of precedence -
+# content, then src, then template - so the config shipped with the role is a
+# fallback: setting coredns_config_src or coredns_config_content is enough to
+# override it, no need to blank this one first.
+#
+# Templates resolve through Ansible's usual search path, which puts the role's
+# own templates/ ahead of the playbook's - hence the .default suffix on the one
+# shipped here: a template named Corefile.j2 inside the role would silently
+# shadow the consumer's own. Point this at your own file (e.g. Corefile.j2 in
+# the playbook's templates/) to replace the built-in forwarding config;
+# coredns_config_src is looked up in files/ instead.
+coredns_config_template: Corefile.default.j2
+coredns_config_src: ""
+coredns_config_content: ""
+
+# Service identity. Set both to root (and coredns_create_user to false) if you
+# would rather not separate privileges.
+coredns_user: coredns
+coredns_group: coredns
+coredns_create_user: true
+
+coredns_state_dir: /var/lib/coredns
+
+# Files systemd reads as root at unit start and exposes, mode 0400 and owned by
+# the service user, under $CREDENTIALS_DIRECTORY (/run/credentials/<unit>, a
+# tmpfs). Mapping of destination name to source path on the host, e.g.
+#
+#   coredns_credentials:
+#     fullchain.pem: /path/to/fullchain.pem
+#     privkey.pem: /path/to/privkey.pem
+#
+# The Corefile then reads: tls {$CREDENTIALS_DIRECTORY}/fullchain.pem ...
+# This is how an unprivileged CoreDNS gets at a file it could not open itself -
+# typically a TLS private key left 0600 root:root by whatever issued it -
+# without relaxing permissions on the original or copying it elsewhere. Leave
+# it empty when serving plain DNS only.
+coredns_credentials: {}
+
+# Environment for the process, written to /etc/default/coredns. The Corefile
+# expands these with the {$VAR} syntax.
+coredns_environment: {}
+
+# Default port for zones that do not carry one. Empty keeps CoreDNS's own 53.
+coredns_listen_port: ""
+
+# Anything else to append to the command line, e.g. ["-quiet"].
+coredns_extra_args: []
+
+coredns_service_enabled: true
+coredns_service_state: started

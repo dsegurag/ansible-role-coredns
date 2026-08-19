@@ -1,0 +1,23 @@
+---
+galaxy_info:
+  role_name: coredns
+  namespace: dsegurag
+  author: Daniel Segura
+  description: Install CoreDNS from the official binary release and run it under systemd
+  license: MIT
+  min_ansible_version: "2.18"
+  platforms:
+    - name: Debian
+      versions:
+        - bookworm
+        - trixie
+    - name: Ubuntu
+      versions:
+        - jammy
+        - noble
+  galaxy_tags:
+    - dns
+    - coredns
+    - systemd
+
+dependencies: []

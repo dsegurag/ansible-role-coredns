@@ -1,0 +1,15 @@
+# {{ ansible_managed }}
+# Minimal forwarding resolver, so the role does something sensible with no
+# configuration at all. Point coredns_config_template at your own template - or
+# use coredns_config_src / coredns_config_content - to replace it.
+. {
+    errors
+    health
+    ready
+    prometheus 127.0.0.1:9153
+    forward . 1.1.1.1 9.9.9.9
+    cache 30
+    loop
+    reload
+    loadbalance
+}

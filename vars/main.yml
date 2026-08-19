@@ -1,0 +1,9 @@
+---
+# Which of the three coredns_config_* variables actually provides the Corefile.
+# The shipped Corefile.default.j2 is a fallback, not a competing source: setting
+# coredns_config_src or coredns_config_content is enough to override it, without
+# having to blank coredns_config_template first.
+coredns_config_source: >-
+  {{ 'content' if coredns_config_content | length > 0
+     else ('src' if coredns_config_src | length > 0
+     else 'template') }}

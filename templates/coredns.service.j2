@@ -1,0 +1,42 @@
+[Unit]
+# {{ ansible_managed }}
+# Adapted from https://github.com/coredns/deployment/tree/master/systemd
+Description=CoreDNS DNS server
+Documentation=https://coredns.io
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User={{ coredns_user }}
+Group={{ coredns_group }}
+LimitNOFILE=1048576
+LimitNPROC=512
+# Required to bind 53, 443 and 853 as an unprivileged user.
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+{% if coredns_credentials | length > 0 %}
+# systemd reads these as root and drops 0400 copies owned by {{ coredns_user }} in
+# $CREDENTIALS_DIRECTORY, so the service never needs access to the source paths.
+{% for name, path in coredns_credentials | dictsort %}
+LoadCredential={{ name }}:{{ path }}
+{% endfor %}
+{% endif %}
+# ProtectSystem=strict mounts everything read-only, so the state directory has to
+# be declared here to stay writable. StateDirectory= is relative to /var/lib.
+StateDirectory={{ coredns_state_dir | basename }}
+WorkingDirectory={{ coredns_state_dir }}
+EnvironmentFile=-/etc/default/coredns
+ExecStart={{ coredns_bin_dir }}/coredns -conf={{ coredns_config_file }}{{ ' -dns.port=' ~ coredns_listen_port if coredns_listen_port | string | length > 0 else '' }}{{ ' ' ~ coredns_extra_args | join(' ') if coredns_extra_args | length > 0 else '' }}
+# Reloads the Corefile only - the TLS key pair is read at startup.
+ExecReload=/bin/kill -SIGUSR1 $MAINPID
+Restart=on-failure
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target
